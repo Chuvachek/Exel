@@ -1,1 +1,269 @@
 Here is the VBA code for the change log in TK-expertise
+/**
+ * Change journal export to Excel1 (v4)
+ * Reads Google Sheets only. Does NOT modify the source spreadsheet.
+ *
+ * Workflow: Google Sheets -> Excel1 (Drive) -> manually -> Excel2 (main journal)
+ */
+
+const CONFIG = {
+  DATA_SHEET: 'Data',
+  HEADER_ROW: 6,
+  FIRST_COLUMN: 1,
+  LAST_COLUMN: 13,
+  DRIVE_FOLDER_ID: '1PLUC-l9Jq4LErSBxA-bZip-91R-pqkTP',
+  NOTIFY_EMAIL: '',
+  EXPORT_PREFIX: 'excel1',
+  DEFAULT_START_ROW: 7,
+  DEFAULT_END_ROW: 50,
+  RANGE_START_KEY: 'EXPORT_START_ROW',
+  RANGE_END_KEY: 'EXPORT_END_ROW'
+};
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('\u0416\u0443\u0440\u043d\u0430\u043b \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0439')
+    .addItem('\u0421\u043e\u0437\u0434\u0430\u0442\u044c Excel1 (\u0443\u043a\u0430\u0437\u0430\u0442\u044c \u0441\u0442\u0440\u043e\u043a\u0438\u2026)', 'exportExcel1Prompt')
+    .addItem('\u0421\u043e\u0437\u0434\u0430\u0442\u044c Excel1 (\u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0439 \u0434\u0438\u0430\u043f\u0430\u0437\u043e\u043d)', 'exportExcel1SavedRange')
+    .addSeparator()
+    .addItem('\u0417\u0430\u0434\u0430\u0442\u044c \u0434\u0438\u0430\u043f\u0430\u0437\u043e\u043d \u0441\u0442\u0440\u043e\u043a \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e', 'setDefaultRowRange')
+    .addItem('\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0439 \u0434\u0438\u0430\u043f\u0430\u0437\u043e\u043d', 'showSavedRowRange')
+    .addSeparator()
+    .addItem('\u0413\u0434\u0435 \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u044e\u0442\u0441\u044f \u0444\u0430\u0439\u043b\u044b?', 'showExportFolderInfo')
+    .addToUi();
+}
+
+function exportExcel1Prompt() {
+  const ui = SpreadsheetApp.getUi();
+
+  const startResp = ui.prompt(
+    '\u0421\u043e\u0437\u0434\u0430\u0442\u044c Excel1',
+    '\u0421 \u043a\u0430\u043a\u043e\u0439 \u0441\u0442\u0440\u043e\u043a\u0438 \u0438\u043c\u043f\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c?\n' +
+    '(\u0441\u0442\u0440\u043e\u043a\u0430 1 \u2014 \u0437\u0430\u0433\u043e\u043b\u043e\u0432\u043a\u0438, \u0434\u0430\u043d\u043d\u044b\u0435 \u043e\u0431\u044b\u0447\u043d\u043e \u0441 2)',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (startResp.getSelectedButton() !== ui.Button.OK) return;
+
+  const endResp = ui.prompt(
+    '\u0421\u043e\u0437\u0434\u0430\u0442\u044c Excel1',
+    '\u041f\u043e \u043a\u0430\u043a\u0443\u044e \u0441\u0442\u0440\u043e\u043a\u0443 \u0432\u043a\u043b\u044e\u0447\u0438\u0442\u0435\u043b\u044c\u043d\u043e \u0438\u043c\u043f\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c?',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (endResp.getSelectedButton() !== ui.Button.OK) return;
+
+  const startRow = parseInt(String(startResp.getResponseText()).trim(), 10);
+  const endRow = parseInt(String(endResp.getResponseText()).trim(), 10);
+
+  if (isNaN(startRow) || isNaN(endRow)) {
+    ui.alert('\u041e\u0448\u0438\u0431\u043a\u0430', '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0446\u0435\u043b\u044b\u0435 \u0447\u0438\u0441\u043b\u0430 (\u043d\u043e\u043c\u0435\u0440\u0430 \u0441\u0442\u0440\u043e\u043a).', ui.ButtonSet.OK);
+    return;
+  }
+
+  saveRowRange_(startRow, endRow);
+  exportExcel1_(startRow, endRow);
+}
+
+function exportExcel1SavedRange() {
+  const range = getSavedRowRange_();
+  exportExcel1_(range.startRow, range.endRow);
+}
+
+function setDefaultRowRange() {
+  const ui = SpreadsheetApp.getUi();
+  const saved = getSavedRowRange_();
+
+  const startResp = ui.prompt(
+    '\u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e',
+    '\u041d\u0430\u0447\u0430\u043b\u044c\u043d\u0430\u044f \u0441\u0442\u0440\u043e\u043a\u0430 (\u0441\u0435\u0439\u0447\u0430\u0441: ' + saved.startRow + '):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (startResp.getSelectedButton() !== ui.Button.OK) return;
+
+  const endResp = ui.prompt(
+    '\u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e',
+    '\u041a\u043e\u043d\u0435\u0447\u043d\u0430\u044f \u0441\u0442\u0440\u043e\u043a\u0430 (\u0441\u0435\u0439\u0447\u0430\u0441: ' + saved.endRow + '):',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (endResp.getSelectedButton() !== ui.Button.OK) return;
+
+  const startRow = parseInt(String(startResp.getResponseText()).trim(), 10);
+  const endRow = parseInt(String(endResp.getResponseText()).trim(), 10);
+
+  if (isNaN(startRow) || isNaN(endRow)) {
+    ui.alert('\u041e\u0448\u0438\u0431\u043a\u0430', '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0446\u0435\u043b\u044b\u0435 \u0447\u0438\u0441\u043b\u0430.', ui.ButtonSet.OK);
+    return;
+  }
+
+  validateRowRange_(startRow, endRow);
+  saveRowRange_(startRow, endRow);
+
+  ui.alert(
+    '\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e',
+    '\u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d: \u0441\u0442\u0440\u043e\u043a\u0438 ' + startRow + ' \u2014 ' + endRow + '.\n' +
+    '\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u00ab\u0421\u043e\u0437\u0434\u0430\u0442\u044c Excel1 (\u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0439 \u0434\u0438\u0430\u043f\u0430\u0437\u043e\u043d)\u00bb.',
+    ui.ButtonSet.OK
+  );
+}
+
+function showSavedRowRange() {
+  const range = getSavedRowRange_();
+  SpreadsheetApp.getUi().alert(
+    '\u0421\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0439 \u0434\u0438\u0430\u043f\u0430\u0437\u043e\u043d',
+    '\u0421\u0442\u0440\u043e\u043a\u0438 ' + range.startRow + ' \u2014 ' + range.endRow +
+    ' \u043b\u0438\u0441\u0442\u0430 \u00ab' + CONFIG.DATA_SHEET + '\u00bb.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+function showExportFolderInfo() {
+  const folder = getExportFolder_();
+  const url = 'https://drive.google.com/drive/folders/' + folder.getId();
+
+  SpreadsheetApp.getUi().alert(
+    '\u041f\u0430\u043f\u043a\u0430 \u0432\u044b\u0433\u0440\u0443\u0437\u043e\u043a Excel1',
+    '\u0424\u0430\u0439\u043b\u044b \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u044e\u0442\u0441\u044f \u043d\u0430 Google Drive:\n\n' +
+    folder.getName() + '\n' +
+    url + '\n\n' +
+    'Excel2 (\u043e\u0441\u043d\u043e\u0432\u043d\u043e\u0439 \u0436\u0443\u0440\u043d\u0430\u043b) \u0441\u043a\u0440\u0438\u043f\u0442 \u043d\u0435 \u0441\u043e\u0437\u0434\u0430\u0451\u0442 \u2014 \u0435\u0433\u043e \u0432\u0435\u0434\u0451\u0442 \u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0439 \u0432\u0440\u0443\u0447\u043d\u0443\u044e.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+function exportExcel1_(startRow, endRow) {
+  validateRowRange_(startRow, endRow);
+
+  const ss = SpreadsheetApp.getActive();
+  const sourceSheet = ss.getSheetByName(CONFIG.DATA_SHEET);
+  if (!sourceSheet) {
+    throw new Error('\u041b\u0438\u0441\u0442 \u00ab' + CONFIG.DATA_SHEET + '\u00bb \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d.');
+  }
+
+  const lastRowInSheet = sourceSheet.getLastRow();
+  if (startRow > lastRowInSheet) {
+    SpreadsheetApp.getUi().alert(
+      '\u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445',
+      '\u041d\u0430 \u043b\u0438\u0441\u0442\u0435 \u00ab' + CONFIG.DATA_SHEET + '\u00bb \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u0441\u0442\u0440\u043e\u043a\u0430: ' + lastRowInSheet + '.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  const effectiveEndRow = Math.min(endRow, lastRowInSheet);
+  
+  // Корректно считываем шапку таблицы (1 строка)
+  const header = sourceSheet
+    .getRange(CONFIG.HEADER_ROW, CONFIG.FIRST_COLUMN, 1, CONFIG.LAST_COLUMN)
+    .getValues();
+    
+  // ИСПРАВЛЕНО: Считаем точное количество запрашиваемых строк (effectiveEndRow - startRow + 1)
+  const numRowsToFetch = effectiveEndRow - startRow + 1;
+  const data = sourceSheet
+    .getRange(startRow, CONFIG.FIRST_COLUMN, numRowsToFetch, CONFIG.LAST_COLUMN)
+    .getValues();
+
+  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd_HH-mm');
+  const tempName = CONFIG.EXPORT_PREFIX + '_temp_' + stamp;
+  const tempSs = SpreadsheetApp.create(tempName);
+  const tempSheet = tempSs.getSheets()[0];
+  tempSheet.setName(CONFIG.DATA_SHEET);
+
+  // Записываем шапку в первую строку тестового файла
+  tempSheet.getRange(1, CONFIG.FIRST_COLUMN, 1, CONFIG.LAST_COLUMN).setValues(header);
+  
+  // ИСПРАВЛЕНО: Указываем точный размер диапазона data.length без прибавления единицы
+  if (data.length > 0) {
+    tempSheet.getRange(2, CONFIG.FIRST_COLUMN, data.length, CONFIG.LAST_COLUMN).setValues(data);
+  }
+
+  SpreadsheetApp.flush();
+
+  const fileName =
+    CONFIG.EXPORT_PREFIX + '_' + stamp + '_\u0441\u0442\u0440\u043e\u043a\u0438_' + startRow + '-' + effectiveEndRow + '.xlsx';
+
+  const blob = exportSpreadsheetAsXlsx_(tempSs.getId()).setName(fileName);
+  const folder = getExportFolder_();
+  const savedFile = folder.createFile(blob);
+
+  DriveApp.getFileById(tempSs.getId()).setTrashed(true);
+
+  const fileUrl = savedFile.getUrl();
+  const folderUrl = 'https://drive.google.com/drive/folders/' + folder.getId();
+
+  if (CONFIG.NOTIFY_EMAIL) {
+    GmailApp.sendEmail(
+      CONFIG.NOTIFY_EMAIL,
+      'Excel1: \u0441\u0442\u0440\u043e\u043a\u0438 ' + startRow + '\u2013' + effectiveEndRow,
+      '\u0421\u043e\u0437\u0434\u0430\u043d \u0444\u0430\u0439\u043b \u0434\u043b\u044f \u043f\u0435\u0440\u0435\u043d\u043e\u0441\u0430 \u0432 Excel2.\n\n' +
+      '\u0424\u0430\u0439\u043b: ' + fileName + '\n' +
+      '\u0421\u0442\u0440\u043e\u043a\u0438 Google Sheets: ' + startRow + ' \u2014 ' + effectiveEndRow + '\n' +
+      '\u0421\u0441\u044b\u043b\u043a\u0430: ' + fileUrl,
+      { attachments: [blob] }
+    );
+  }
+
+  SpreadsheetApp.getUi().alert(
+    'Excel1 \u0441\u043e\u0437\u0434\u0430\u043d',
+    '\u0424\u0430\u0439\u043b: ' + fileName + '\n' +
+    '\u0421\u0442\u0440\u043e\u043a\u0438: ' + startRow + ' \u2014 ' + effectiveEndRow + '\n\n' +
+    '\u0424\u0430\u0439\u043b: ' + fileUrl + '\n' +
+    '\u041f\u0430\u043f\u043a\u0430: ' + folderUrl + '\n\n' +
+    '\u0414\u0430\u043b\u044c\u0448\u0435: \u043e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 Excel1 \u0438 \u043f\u0435\u0440\u0435\u043d\u0435\u0441\u0438\u0442\u0435 \u0434\u0430\u043d\u043d\u044b\u0435 \u0432 Excel2 \u0432\u0440\u0443\u0447\u043d\u0443\u044e.',
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+function exportSpreadsheetAsXlsx_(spreadsheetId) {
+  const url = 'https://docs.google.com/spreadsheets/export?id=' + spreadsheetId + '&exportFormat=xlsx';
+  const token = ScriptApp.getOAuthToken();
+  const response = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + token },
+    muteHttpExceptions: true
+  });
+
+  if (response.getResponseCode() !== 200) {
+    throw new Error('Export failed: HTTP ' + response.getResponseCode());
+  }
+
+  return response.getBlob();
+}
+
+function validateRowRange_(startRow, endRow) {
+  if (startRow < 1 || endRow < 1) {
+    throw new Error('\u041d\u043e\u043c\u0435\u0440\u0430 \u0441\u0442\u0440\u043e\u043a \u0434\u043e\u043b\u0436\u043d\u044b \u0431\u044b\u0442\u044c \u2265 1.');
+  }
+  if (startRow <= CONFIG.HEADER_ROW) {
+    throw new Error(
+      '\u041d\u0430\u0447\u0430\u043b\u044c\u043d\u0430\u044f \u0441\u0442\u0440\u043e\u043a\u0430 \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u0431\u043e\u043b\u044c\u0448\u0435 \u0441\u0442\u0440\u043e\u043a\u0438 \u0437\u0430\u0433\u043e\u043b\u043e\u0432\u043a\u043e\u0432 (' + CONFIG.HEADER_ROW + ').'
+    );
+  }
+  if (endRow < startRow) {
+    throw new Error(
+      '\u041a\u043e\u043d\u0435\u0447\u043d\u0430\u044f \u0441\u0442\u0440\u043e\u043a\u0430 (' + endRow + ') \u043c\u0435\u043d\u044c\u0448\u0435 \u043d\u0430\u0447\u0430\u043b\u044c\u043d\u043e\u0439 (' + startRow + ').'
+    );
+  }
+}
+
+function getSavedRowRange_() {
+  const props = PropertiesService.getScriptProperties();
+  const startRaw = props.getProperty(CONFIG.RANGE_START_KEY);
+  const endRaw = props.getProperty(CONFIG.RANGE_END_KEY);
+
+  return {
+    startRow: startRaw ? parseInt(startRaw, 10) : CONFIG.DEFAULT_START_ROW,
+    endRow: endRaw ? parseInt(endRaw, 10) : CONFIG.DEFAULT_END_ROW
+  };
+}
+
+function saveRowRange_(startRow, endRow) {
+  validateRowRange_(startRow, endRow);
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty(CONFIG.RANGE_START_KEY, String(startRow));
+  props.setProperty(CONFIG.RANGE_END_KEY, String(endRow));
+}
+
+function getExportFolder_() {
+  if (CONFIG.DRIVE_FOLDER_ID) {
+    return DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
+  }
+  return DriveApp.getRootFolder();
+}
